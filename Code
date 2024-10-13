@@ -1,0 +1,216 @@
+import javafx.application.Application;
+import javafx.embed.swing.SwingFXUtils;
+import javafx.scene.Scene;
+import javafx.scene.canvas.Canvas;
+import javafx.scene.canvas.GraphicsContext;
+import javafx.scene.control.*;
+import javafx.scene.image.Image;
+import javafx.scene.image.PixelReader;
+import javafx.scene.image.WritableImage;
+import javafx.scene.layout.BorderPane;
+import javafx.scene.layout.HBox;
+import javafx.scene.layout.VBox;
+import javafx.scene.paint.Color;
+import javafx.stage.FileChooser;
+import javafx.stage.Stage;
+
+import javax.imageio.ImageIO;
+import java.io.File;
+import java.io.IOException;
+import java.util.LinkedList;
+import java.util.Stack;
+
+public class PixelPerfectApp extends Application {
+    private static final int CANVAS_SIZE = 512;
+    private static final int PIXEL_SIZE = 16;
+    private Color currentColor = Color.BLACK;
+
+    private final Stack<Image> undoStack = new Stack<>();
+    private final Stack<Image> redoStack = new Stack<>();
+    private final LinkedList<Color> colorHistory = new LinkedList<>();
+    
+    private boolean isEraserMode = false;
+
+    @Override
+    public void start(Stage primaryStage) {
+        primaryStage.setTitle("PixelPerfect - Pixel Art Maker");
+
+        Canvas canvas = new Canvas(CANVAS_SIZE, CANVAS_SIZE);
+        GraphicsContext gc = canvas.getGraphicsContext2D();
+        drawGrid(gc);
+
+        // Color Picker for selecting colors
+        ColorPicker colorPicker = new ColorPicker();
+        colorPicker.setValue(currentColor);
+        colorPicker.setOnAction(e -> {
+            currentColor = colorPicker.getValue();
+            addToColorHistory(currentColor);
+        });
+
+        // Eraser toggle button
+        ToggleButton eraserButton = new ToggleButton("Eraser");
+        eraserButton.setOnAction(e -> isEraserMode = eraserButton.isSelected());
+
+        // Undo and Redo buttons
+        Button undoButton = new Button("Undo");
+        Button redoButton = new Button("Redo");
+        undoButton.setOnAction(e -> undo(gc));
+        redoButton.setOnAction(e -> redo(gc));
+
+        // Save Button to export artwork as an image
+        Button saveButton = new Button("Save");
+        saveButton.setOnAction(e -> saveImage(canvas, primaryStage));
+
+        // Drawing on the canvas with mouse click
+        canvas.setOnMouseClicked(e -> {
+            captureState(canvas);
+            int x = ((int) e.getX() / PIXEL_SIZE) * PIXEL_SIZE;
+            int y = ((int) e.getY() / PIXEL_SIZE) * PIXEL_SIZE;
+
+            if (isEraserMode) {
+                gc.setFill(Color.WHITE);  // Erase by painting white
+            } else {
+                gc.setFill(currentColor);
+            }
+            gc.fillRect(x, y, PIXEL_SIZE, PIXEL_SIZE);
+        });
+
+        // Fill Tool button
+        Button fillButton = new Button("Fill Tool");
+        fillButton.setOnAction(e -> canvas.setOnMouseClicked(event -> {
+            captureState(canvas);
+            int x = (int) event.getX();
+            int y = (int) event.getY();
+            floodFill(gc, x, y, getColorAtPixel(canvas, x, y), currentColor);
+        }));
+
+        // Layout setup
+        HBox controls = new HBox(10, colorPicker, eraserButton, undoButton, redoButton, fillButton, saveButton);
+        VBox colorHistoryBox = createColorHistoryBox();
+        BorderPane root = new BorderPane();
+        root.setCenter(canvas);
+        root.setTop(controls);
+        root.setRight(colorHistoryBox);
+
+        Scene scene = new Scene(root);
+        primaryStage.setScene(scene);
+        primaryStage.show();
+    }
+
+    // Draws the grid on the canvas
+    private void drawGrid(GraphicsContext gc) {
+        gc.setStroke(Color.LIGHTGRAY);
+        for (int x = 0; x < CANVAS_SIZE; x += PIXEL_SIZE) {
+            for (int y = 0; y < CANVAS_SIZE; y += PIXEL_SIZE) {
+                gc.strokeRect(x, y, PIXEL_SIZE, PIXEL_SIZE);
+            }
+        }
+    }
+
+    // Save the canvas as a PNG image
+    private void saveImage(Canvas canvas, Stage stage) {
+        FileChooser fileChooser = new FileChooser();
+        fileChooser.getExtensionFilters().add(new FileChooser.ExtensionFilter("PNG files (*.png)", "*.png"));
+        fileChooser.setInitialFileName("pixel_art.png");
+        File file = fileChooser.showSaveDialog(stage);
+
+        if (file != null) {
+            try {
+                WritableImage writableImage = new WritableImage(CANVAS_SIZE, CANVAS_SIZE);
+                canvas.snapshot(null, writableImage);
+                ImageIO.write(SwingFXUtils.fromFXImage(writableImage, null), "png", file);
+                System.out.println("Image saved: " + file.getPath());
+            } catch (IOException ex) {
+                System.out.println("Error saving image: " + ex.getMessage());
+            }
+        }
+    }
+
+    // Capture canvas state for undo functionality
+    private void captureState(Canvas canvas) {
+        WritableImage snapshot = new WritableImage(CANVAS_SIZE, CANVAS_SIZE);
+        canvas.snapshot(null, snapshot);
+        undoStack.push(snapshot);
+        redoStack.clear(); // Clear redo stack after new action
+    }
+
+    // Undo function
+    private void undo(GraphicsContext gc) {
+        if (!undoStack.isEmpty()) {
+            redoStack.push(undoStack.pop());
+            if (!undoStack.isEmpty()) {
+                gc.drawImage(undoStack.peek(), 0, 0);
+            }
+        }
+    }
+
+    // Redo function
+    private void redo(GraphicsContext gc) {
+        if (!redoStack.isEmpty()) {
+            Image lastUndo = redoStack.pop();
+            undoStack.push(lastUndo);
+            gc.drawImage(lastUndo, 0, 0);
+        }
+    }
+
+    // Adds color to history
+    private void addToColorHistory(Color color) {
+        if (!colorHistory.contains(color)) {
+            if (colorHistory.size() == 5) {
+                colorHistory.removeFirst(); // Limit to 5 colors
+            }
+            colorHistory.add(color);
+        }
+    }
+
+    // Create color history box
+    private VBox createColorHistoryBox() {
+        VBox colorHistoryBox = new VBox(5);
+        for (Color color : colorHistory) {
+            Button colorButton = new Button();
+            colorButton.setStyle("-fx-background-color: #" + color.toString().substring(2, 8) + ";");
+            colorButton.setPrefSize(20, 20);
+            colorButton.setOnAction(e -> currentColor = color);
+            colorHistoryBox.getChildren().add(colorButton);
+        }
+        return colorHistoryBox;
+    }
+
+    // Flood fill algorithm for fill tool
+    private void floodFill(GraphicsContext gc, int x, int y, Color targetColor, Color fillColor) {
+        if (targetColor.equals(fillColor)) return;
+
+        WritableImage writableImage = new WritableImage(CANVAS_SIZE, CANVAS_SIZE);
+        PixelReader pixelReader = gc.getCanvas().snapshot(null, writableImage).getPixelReader();
+        
+        Stack<int[]> stack = new Stack<>();
+        stack.push(new int[]{x, y});
+
+        while (!stack.isEmpty()) {
+            int[] pos = stack.pop();
+            int px = pos[0], py = pos[1];
+            Color color = pixelReader.getColor(px, py);
+
+            if (color.equals(targetColor)) {
+                gc.getPixelWriter().setColor(px, py, fillColor);
+
+                if (px + 1 < CANVAS_SIZE) stack.push(new int[]{px + 1, py});
+                if (px - 1 >= 0) stack.push(new int[]{px - 1, py});
+                if (py + 1 < CANVAS_SIZE) stack.push(new int[]{px, py + 1});
+                if (py - 1 >= 0) stack.push(new int[]{px, py - 1});
+            }
+        }
+    }
+
+    // Helper to get color at a specific pixel on the canvas
+    private Color getColorAtPixel(Canvas canvas, int x, int y) {
+        WritableImage snapshot = new WritableImage(CANVAS_SIZE, CANVAS_SIZE);
+        canvas.snapshot(null, snapshot);
+        PixelReader pixelReader = snapshot.getPixelReader();
+        return pixelReader.getColor(x, y);
+    }
+
+    public static void main(String[] args) {
+        launch(args);
+    }
+}
